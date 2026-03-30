@@ -1,7 +1,18 @@
+import os
+import time
+
 import streamlit as st
-from utils.pdf_load import load_pdf
+from click import prompt
+
+from utils.pdf_load import extract_text
 from utils.vector import create_faiss_index , retrive_relevant_docs
 from utils.chat_utils import get_chat_model , ask_chat_model
+from utils.ui_utils import upload_pdf
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+from dotenv import load_dotenv
+
+load_dotenv()
+EURI_API_KEY = os.getenv("EURI_API_KEY")
 
 st.set_page_config(page_title="MedChatBot", page_icon=":robot_face:",
                    layout="wide", initial_sidebar_state="expanded")
@@ -81,12 +92,102 @@ st.markdown("""
 
 
 with st.sidebar:
-    uploaded_files = load_pdf()
+    uploaded_files = upload_pdf()
 
     if len(uploaded_files) >0 :
         st.write(len(uploaded_files) , "files uploaded successfully!")
-        for file in uploaded_files:
-            st.write(file.name)
+
+        if st.button('process uploaded files',type='primary'):
+            with st.spinner("Processing uploaded files"):
+                all_txt = []
+                for file in uploaded_files:
+                    text = extract_text(file)
+                    all_txt.append(text)
+
+                #split text into chunks
+                text_splitter = RecursiveCharacterTextSplitter(
+                    chunk_size=1000,
+                    chunk_overlap=200,
+                    length_function=len
+                )
+                chunks = []
+                for text in all_txt:
+                    chunks.extend(text_splitter.split_text(text))
+
+                # create faiss index
+                vectorstore = create_faiss_index(chunks)
+                st.session_state.vectorstore = vectorstore
+
+                #initialise chat model
+
+                chat_model = get_chat_model(model='gpt-4.1-mini',temp=0.5 , api_key=EURI_API_KEY)
+                st.session_state.chat_model = chat_model
+                st.success("Documents processed successfully!")
+                st.balloons()
+
+
+st.markdown("### chat with your Documents")
+
+#Display chat messages
+for message in st.session_state.messages:
+    with st.chat_message(message['role']):
+        st.markdown(message['content'])
+        st.markdown(message['timestamp'])
+
+#chat input
+
+if prompt := st.chat_input("Ask about your medical documents..."):
+    timestamp = time.strftime("%H:%M")
+    st.session_state.messages.append({
+        "role": "user",
+        "content": prompt,
+        "timestamp": timestamp,
+    })
+    # Display user message
+    with st.chat_message('user'):
+        st.markdown(prompt)
+        st.markdown(timestamp)
+
+    if st.session_state.vectorstore and st.session_state.chat_model:
+        with st.chat_message("assistant"):
+            with st.spinner("Assistant Processing"):
+                relevant_docs = retrive_relevant_docs(st.session_state.vectorstore, prompt)
+                print(relevant_docs)
+                # create context from the relevant docs
+
+                context = "\n\n".join([doc.page_content for doc in relevant_docs])
+                print(context)
+                # create prompt with context
+
+                system_prompt = f"""You are MediChat Pro, an intelligent medical document assistant. 
+                Based on the  medical documents uploaded, provide accurate and helpful answers. 
+                If the information is not in the documents, clearly state that.
+                
+                Medical Documents:
+                {context}
+                
+                user Question : {prompt}
+                
+                Ans = """
+
+                response = ask_chat_model(st.session_state.chat_model, prompt)
+
+            st.markdown(response)
+            st.caption(timestamp)
+
+
+            # add assistants message to session state
+            st.session_state.messages.append({
+                "role": "assistant",
+                "content": response,
+                "timestamp": timestamp,
+            })
+    else:
+       st.chat_message("assistant")
+       st.error("please upload files")
+       st.caption(timestamp)
+
+
 
 
 

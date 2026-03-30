@@ -1,6 +1,8 @@
-# here we will ask the user to load the pdfs using streamlit
-import streamlit as st
+from pypdf import PdfReader
 
-def load_pdf():
-    return st.file_uploader("upload pdfs here" , ['pdf'],True,help='you can upload multiple files here')
-
+def extract_text(path):
+    reader = PdfReader(path)
+    text = ""
+    for page in reader.pages:
+        text += page.extract_text() + "\n"
+    return text
